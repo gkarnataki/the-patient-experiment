@@ -1,0 +1,749 @@
+---
+title: 'W241 Experiments and Causality Final Project'
+author: 'Guatam Karnataki, Adara Liao, Yaran Zhang' 
+output:
+  rmarkdown::github_document
+---
+
+**Contents**
+Part 1: Process and Generate Clean Survey Data 
+Part 2: Generate Modeling Data: add Y and other Outcome Variable for modeling use
+Part 3: EDA for Covarites
+Part 4: EDA for Outcome Variables
+Part 5: Model 1 xxxx
+Part 6: Model 2 xxxx
+Part 7: xxx
+
+**DataFrame Introcuction**
+**d.clean.survey**: clean data direclty from survey, with below fields
+**d.clean.model**: clean data from Survey + Outcome Varaibles + Other variables ONLY for modeling purpose
+
+
+```{r}
+# load packages 
+library(data.table)
+library(foreign)
+library(lmtest)
+library(stargazer)
+library(sandwich)
+library(bit64)
+library(ggplot2)
+library(dplyr)
+library(scales)
+library(stringr)
+library(reshape2)
+
+```
+
+
+```{r}
+##################################### Part 1: Process and Generate Clean Survey Data 
+#### result dataframe:  d.clean.survey
+
+# Load survey result from CSV
+dsm <- fread("./data/sm_results.csv")
+dq <- fread("./data/qualtrics_results.csv")
+
+# Convert column type for merge purpose
+dsm <- transform(dsm, year_of_birth =  as.character(year_of_birth))
+dsm <- transform(dsm, respondent_id =  as.character(respondent_id))
+
+# Correct column name for SM file
+colnames(dsm)[colnames(dsm)=="psyciatrist"] <- "psychiatrist"
+colnames(dsm)[colnames(dsm)=="denstist"] <- "dentist"
+colnames(dq)[colnames(dq)=="end_Date"] <- "end_date"
+
+# UNION SM result and Q result except for gender-specific columns
+d.clean.survey <- rbind(dsm[,c(1:10, 15:18)], dq[, 2:15], fill=TRUE)
+
+# Append gender-specific columns from Q result
+d.clean.survey$gender_specific_physician1[d.clean.survey$channel == "qualtrics"] <- "Female"
+d.clean.survey$gender_specific_score1[d.clean.survey$channel == "qualtrics"]  <- coalesce(dq$urologist_score1, dq$obgyn_score1)
+d.clean.survey$gender_specific_physician2[d.clean.survey$channel == "qualtrics"]  <- "Female"
+d.clean.survey$gender_specific_score2[d.clean.survey$channel == "qualtrics"]  <- coalesce(dq$urologist_score2, dq$obgyn_score2)
+d.clean.survey$gender_specific_physician3 [d.clean.survey$channel == "qualtrics"] <- "Male"
+d.clean.survey$gender_specific_score3[d.clean.survey$channel == "qualtrics"]  <- coalesce(dq$urologist_score3, dq$obgyn_score3)
+d.clean.survey$gender_specific_physician4[d.clean.survey$channel == "qualtrics"]  <- "Male"
+d.clean.survey$gender_specific_score4[d.clean.survey$channel == "qualtrics"]  <- coalesce(dq$urologist_score4, dq$obgyn_score4)
+
+# Remove irregular words
+d.clean.survey$race <- gsub("\xeb_", " ", d.clean.survey$race)
+d.clean.survey$income <- gsub("\xeb_", " ", d.clean.survey$income)
+d.clean.survey$degree <- gsub("\xeb_", " ", d.clean.survey$degree)
+d.clean.survey$income <- gsub("\xeb_", " ", d.clean.survey$income)
+d.clean.survey$degree <- gsub("<eb>_", " ", d.clean.survey$degree)
+
+# Set NA
+d.clean.survey$pcp[d.clean.survey$pcp == "NULL"] <- NA
+d.clean.survey$cardiologist[d.clean.survey$cardiologist == "NULL"] <- NA
+d.clean.survey$psychiatrist[d.clean.survey$psychiatrist == "NULL"] <- NA
+d.clean.survey$dentist[d.clean.survey$dentist == "NULL"] <- NA
+
+# Make gender value consistent
+d.clean.survey$gender[d.clean.survey$gender == "male"] <- "Male"
+d.clean.survey$pcp[d.clean.survey$pcp == "male"] <- "Male"
+d.clean.survey$cardiologist[d.clean.survey$cardiologist == "male"] <- "Male"
+d.clean.survey$psychiatrist[d.clean.survey$psychiatrist == "male"] <- "Male"
+d.clean.survey$dentist[d.clean.survey$dentist == "male"] <- "Male"
+
+d.clean.survey$gender[d.clean.survey$gender == "female"] <- "Female"
+d.clean.survey$pcp[d.clean.survey$pcp == "female"] <- "Female"
+d.clean.survey$cardiologist[d.clean.survey$cardiologist == "female"] <- "Female"
+d.clean.survey$psychiatrist[d.clean.survey$psychiatrist == "female"] <- "Female"
+d.clean.survey$dentist[d.clean.survey$dentist == "female"] <- "Female"
+
+# Make degree value consistent
+d.clean.survey$degree <-  gsub("degree", "Degree", d.clean.survey$degree)
+d.clean.survey$degree[d.clean.survey$degree == "High school graduate (high school diploma or equivalent including GED)"] <-  "High School Graduate"
+d.clean.survey$degree[d.clean.survey$degree == "Professional Degree (JD, MD)"] <-  "Professional Degree (MD, JD etc.)"
+
+
+# Make race value consistent
+d.clean.survey$race <-  gsub("American Indian or Alaskan Native", "American Indian or Alaska Native", d.clean.survey$race)
+d.clean.survey$race <-  gsub("Others not mentioned above", "Others not mentioned", d.clean.survey$race)
+d.clean.survey$race <-  gsub("Prefer not to disclose", "Prefer NOT to disclose", d.clean.survey$race)
+
+# Correct year_of_birth data and convert to int
+d.clean.survey$year_of_birth <-  gsub("3/22/92", "1992", d.clean.survey$year_of_birth)
+d.clean.survey$year_of_birth <-  gsub("5/21/84", "1984", d.clean.survey$year_of_birth)
+d.clean.survey$year_of_birth <-  gsub("6/3/80", "1980", d.clean.survey$year_of_birth)
+d.clean.survey$year_of_birth <-  gsub("5281993", "1993", d.clean.survey$year_of_birth)
+d.clean.survey$year_of_birth <-  gsub("3/29/84", "1992", d.clean.survey$year_of_birth)
+
+
+# Make income value consistent
+d.clean.survey$income[d.clean.survey$income == "$50,000 and $99,999"] <- "$50,000 to $99,999"
+d.clean.survey$income[d.clean.survey$income == "$150,000 or $199,999"] <- "$50,000 to $99,999"
+d.clean.survey$income[d.clean.survey$income == "More than $199,999"] <- "$200,000 or more"
+
+
+# Improve format
+d.clean.survey$channel <-  gsub("surveymonkey", "SurveyMonkey", d.clean.survey$channel)
+d.clean.survey$channel <-  gsub("qualtrics", "Qualtrics", d.clean.survey$channel)
+
+# Make Survey Monkey timestamp length consistent Compliance Check
+d.clean.survey[nchar(d.clean.survey$start_date) == 12,]$start_date <- gsub(" ", " 0", d.clean.survey[nchar(d.clean.survey$start_date) == 12,]$start_date)
+d.clean.survey[nchar(d.clean.survey$end_date) == 12,]$end_date <- gsub(" ", " 0", d.clean.survey[nchar(d.clean.survey$end_date) == 12,]$end_date)
+
+# Preview data
+head(d.clean.survey)
+
+# Save in CSV as backup
+write.csv(d.clean.survey, file = "d_clean_survey.csv")
+
+```
+
+Ok, so. I think that you've got some issues in the model that you've written. And, unfortunately, the way you've got your data stored, I cannot recreate the *full* set of data that you'd need to esitmate the **correct** model, but I can get you pretty close. 
+
+1. For each choice that a person made, there were **four** options that they could have chosen, right? The four cards. 
+2. What you've got recorded is the binary indicaton if they chose a *male* or *female* person in for that choice. 
+3. So, while the ideal data, I think, would have four rows for each choice that a person made, instead, I'm going to collapse the two options that are *male* and the two options that are *female*. 
+4. This is going to leave you with a set of choices for each of `pcp`, `cardiologist`, `psychiatrist`, `dentist`. 
+
+```{r alex_models}
+d <- fread('./d_clean_survey.csv')
+d <- d[ , .(respondent_id, gender, pcp, cardiologist, psychiatrist, dentist)]
+d <- d[complete.cases(d), ]
+
+d[ , ':='(
+  pcp_female = pcp == 'Female', 
+  pcp_male = !(pcp == 'Female'), 
+  cardiologist_female = cardiologist == 'Female', 
+  cardiologist_male = !(cardiologist == 'Female'), 
+  psychiatrist_female = psychiatrist == 'Female', 
+  psychiatrist_male = !(psychiatrist == 'Female'), 
+  dentist_female = dentist == 'Female', 
+  dentist_male = !(dentist == 'Female'))
+  ]
+d[ , ':='(
+  pcp = NULL, 
+  cardiologist = NULL, 
+  psychiatrist = NULL, 
+  dentist = NULL)
+  ]
+
+setkeyv(d, 'respondent_id')
+
+tall_data <- expand.grid(
+  respondent_id = d[ , respondent_id], 
+  specialty = c('pcp', 'cardiologist', 'psychiatrist', 'dentist'), 
+  doctor_gender = c('male', 'female')
+  )
+
+tall_data <- data.table(tall_data)
+setkeyv(tall_data, cols = c('respondent_id', 'specialty', 'doctor_gender'))
+
+pcp_female <- merge(
+  tall_data[specialty == 'pcp' & doctor_gender == 'female'], 
+  d[ , .(respondent_id, 'choice' = pcp_female, 'subject_gender' = gender)], 
+  by = 'respondent_id'
+  )
+pcp_male <- merge(
+  tall_data[specialty == 'pcp' & doctor_gender == 'male'], 
+  d[ , .(respondent_id, 'choice' = pcp_male, 'subject_gender' = gender)], 
+  by = 'respondent_id'
+)
+cardiologist_female <- merge(
+  tall_data[specialty == 'cardiologist' & doctor_gender == 'female'], 
+  d[ , .(respondent_id, 'choice' = cardiologist_female, 'subject_gender' = gender)], 
+  by = 'respondent_id'
+)
+cardiologist_male <- merge(
+  tall_data[specialty == 'cardiologist' & doctor_gender == 'male'], 
+  d[ , .(respondent_id, 'choice' = cardiologist_male, 'subject_gender' = gender)], 
+  by = 'respondent_id'
+)
+psychiatrist_female <- merge(
+  tall_data[specialty == 'psychiatrist' & doctor_gender == 'female'], 
+  d[ , .(respondent_id, 'choice' = psychiatrist_female, 'subject_gender' = gender)],
+  by = 'respondent_id'
+)
+psychiatrist_male <- merge(
+  tall_data[specialty == 'psychiatrist' & doctor_gender == 'male'], 
+  d[ , .(respondent_id, 'choice' = psychiatrist_male, 'subject_gender' = gender)],
+  by = 'respondent_id'
+)
+dentist_female <- merge(
+  tall_data[specialty == 'dentist' & doctor_gender == 'female'], 
+  d[ , .(respondent_id, 'choice' = dentist_female, 'subject_gender' = gender)],
+  by = 'respondent_id'
+)
+dentist_male <- merge(
+  tall_data[specialty == 'dentist' & doctor_gender == 'male'], 
+  d[ , .(respondent_id, 'choice' = dentist_male, 'subject_gender' = gender)],
+  by = 'respondent_id'
+)
+
+tall_data_2 <- rbind(
+  pcp_female, pcp_male,
+  cardiologist_female, cardiologist_male,
+  psychiatrist_female, psychiatrist_male,
+  dentist_female, dentist_male
+  )
+
+tall_data_2 <- data.table(tall_data_2)
+tall_data_2 <- tall_data_2[complete.cases(tall_data_2)]
+
+mod_1 <- tall_data_2[ , lm(choice ~ doctor_gender)]
+mod_1$cluster_se <- sqrt(diag(vcovCL(mod_1, tall_data_2[ , respondent_id])))
+
+mod_2 <- tall_data_2[ , lm(choice ~ specialty * doctor_gender)]
+mod_2$cluster_se <- sqrt(diag(vcovCL(mod_2, tall_data_2[ , respondent_id])))
+
+doctor_specialty_predictions <- data.table(
+  expand.grid(
+    'specialty' = c('pcp', 'cardiologist', 'psychiatrist', 'dentist'), 
+    'doctor_gender' = c('female', 'male')
+  )
+)
+
+doctor_specialty_predictions <- cbind(
+  doctor_specialty_predictions, 
+  predict(mod_2, newdata = doctor_specialty_predictions, interval = 'confidence')
+)
+
+mod_3 <- tall_data_2[ , lm(choice ~ doctor_gender * subject_gender)]
+summary(mod_3)
+
+mod_4 <- tall_data_2[ , lm(choice ~ specialty * doctor_gender * subject_gender)]
+summary(mod_4)
+```
+
+ I'll leave the team to interpret each of these models. 
+
+
+
+```{r}
+##################################### Part 1.5: Compliance Check - add duration column and plot
+#### result dataframe:  d.clean.survey
+
+# Calculate durartion(in minutes) to complete survey 
+d.clean.survey$duration_min[d.clean.survey$channel=="SurveyMonkey"] <-  ( as.numeric(substr(d.clean.survey$end_date[d.clean.survey$channel=="SurveyMonkey"], 3, 4)) - as.numeric(substr(d.clean.survey$start_date[d.clean.survey$channel=="SurveyMonkey"], 3, 4)) ) * 1440 + (as.numeric(substr(d.clean.survey$end_date[d.clean.survey$channel=="SurveyMonkey"], 9, 10)) - as.numeric(substr(d.clean.survey$start_date[d.clean.survey$channel=="SurveyMonkey"], 9, 10)) ) * 60  +  (  as.numeric(substr(d.clean.survey$end_date[d.clean.survey$channel=="SurveyMonkey"], 12, 13))  - as.numeric(substr(d.clean.survey$start_date[d.clean.survey$channel=="SurveyMonkey"], 12, 13)) )
+
+d.clean.survey$duration_min[d.clean.survey$channel=="Qualtrics"] <-  ( as.numeric(substr(d.clean.survey$end_date[d.clean.survey$channel=="Qualtrics"], 9, 10)) - as.numeric(substr(d.clean.survey$start_date[d.clean.survey$channel=="Qualtrics"], 9, 10)) ) * 1440 + ( as.numeric(substr(d.clean.survey$end_date[d.clean.survey$channel=="Qualtrics"], 12, 13)) - as.numeric(substr(d.clean.survey$start_date[d.clean.survey$channel=="Qualtrics"], 12, 13)) ) * 60  +  (  as.numeric(substr(d.clean.survey$end_date[d.clean.survey$channel=="Qualtrics"], 15, 16))  -  as.numeric(substr(d.clean.survey$start_date[d.clean.survey$channel=="Qualtrics"], 15, 16))) + ( as.numeric(substr(d.clean.survey$end_date[d.clean.survey$channel=="Qualtrics"], 18, 19))  -  as.numeric(substr(d.clean.survey$start_date[d.clean.survey$channel=="Qualtrics"], 18, 19)))/60
+
+# Preview data
+head(d.clean.survey)
+
+d.clean.survey$duration_min_category <- case_when(
+  d.clean.survey$duration_min <=1 ~ "layer0: Less than 1 minute",
+  d.clean.survey$duration_min <=2 & d.clean.survey$duration_min > 1  ~ "layer1:  1~2 minutes",
+  d.clean.survey$duration_min <=3 & d.clean.survey$duration_min > 2  ~ "layer2:  2~3 minutes",
+  d.clean.survey$duration_min <=4 & d.clean.survey$duration_min > 3  ~ "layer3:  3~4 minutes",
+  d.clean.survey$duration_min <=5 & d.clean.survey$duration_min > 4  ~ "layer4:  4~5 minutes",
+  d.clean.survey$duration_min <=10 & d.clean.survey$duration_min > 5  ~ "layer5:  5~10 minutes",
+  d.clean.survey$duration_min <=20 & d.clean.survey$duration_min > 10  ~ "layer6: 10~20 minutes",
+  d.clean.survey$duration_min <=100 & d.clean.survey$duration_min > 20  ~ "layer7: 20~100 minutes",
+  d.clean.survey$duration_min <=1000 & d.clean.survey$duration_min > 100  ~ "layer8: 100~1000 minutes",
+  d.clean.survey$duration_min > 1000  ~ "layer9: More than 1000 minutes")
+
+ggplot(data=d.clean.survey, aes(x=duration_min_category, fill=duration_min_category)) +
+  geom_bar() +
+  geom_text( stat='count' , aes(label=..count..), vjust=-0.5) +
+  scale_x_discrete(labels = wrap_format(10)) + 
+  theme(legend.position = "none") +
+  xlab("Time to Complete Survey (in minutes)")
+
+# # Compliance Check: duration_min distribution from 0 to 5.9k
+# ggplot(data.frame(d.clean.survey[d.clean.survey$duration_min<=20,]), aes(y=duration_min)) +
+#   geom_boxplot(outlier.colour="red", outlier.shape=1,outlier.size=4)
+# 
+# ggplot(data.frame(d.clean.survey[d.clean.survey$duration_min>20 & d.clean.survey$duration_min<1000,]), aes(x=duration_min)) +
+#   geom_bar() + 
+#     coord_cartesian(xlim = c(20, 1000))
+# 
+# ggplot(data.frame(d.clean.survey[d.clean.survey$duration_min>1000,]), aes(x=duration_min)) +
+#   geom_bar() + 
+#     coord_cartesian(xlim = c(1000, 6000))
+# 
+# # Compliance Check: duration_min < 2 minutes, considered as not a valid feedback
+# nrow(d.clean.survey[d.clean.survey$duration_min<1,]) # 4 rows
+# nrow(d.clean.survey[d.clean.survey$duration_min<2,]) # 56 rows
+
+
+```
+
+```{r}
+d <- d.clean.model
+d[,.N]
+d[gender=="Male",.N]/d[gender=="Female",.N]
+
+ggplot(data=d.clean.survey, aes(x=income, fill=income)) +
+  geom_bar() +
+  geom_text( stat='count' , aes(label=..count..), vjust=-0.5) +
+  scale_x_discrete(labels = wrap_format(10)) + 
+  theme(legend.position = "none") +
+  xlab("Time to Complete Survey (in minutes)")
+
+
+```
+
+
+
+```{r}
+##################################### Part 2: Generate Modeling Data: add Y and other Outcome Variable for modeling use
+#### result dataframe:  d.clean.model
+#### result dataframe:  d.clean.model.trans
+
+# Genderate Y for 4 non-gender-specific specialty
+d.clean.model <- d.clean.survey
+
+d.clean.model[,Y_pcp := ifelse(gender==pcp, 1, -1)]
+d.clean.model[,Y_cardio := ifelse(gender==cardiologist, 1, -1)]
+d.clean.model[,Y_psy := ifelse(gender==psychiatrist, 1, -1)]
+d.clean.model[,Y_den := ifelse(gender==dentist, 1, -1)]
+d.clean.model[,Y_1 := Y_pcp + Y_cardio + Y_psy + Y_den]
+
+# Generate #of Famele/Male within 3 specs
+d.clean.model$Y_4spec_female <- str_count(paste(d.clean.model$pcp, d.clean.model$cardiologist, d.clean.model$psychiatrist, d.clean.model$dentist), "Female")
+d.clean.model$Y_4spec_male <- str_count(paste(d.clean.model$pcp, d.clean.model$cardiologist, d.clean.model$psychiatrist, d.clean.model$dentist), "Male")
+d.clean.model <- d.clean.model[(d.clean.model$Y_4spec_female + d.clean.model$Y_4spec_male) == 4,]
+
+
+######## Create transpose dataframe
+d.clean.model.trans  <- melt(d.clean.model[,c(2, 7, 11:14)], id.vars=c("respondent_id","gender"),  
+                             variable.name = "specialty", value.name="gender_selected", na.rm=TRUE)
+
+d.clean.model.trans[, Y_if_female := ifelse(gender_selected=="Female", 1, 0)]
+d.clean.model.trans[, isfemale := ifelse(gender=="Female", 1, 0)]
+
+# Preview data
+head(d.clean.model)
+head(d.clean.model.trans)
+
+```
+
+```{r}
+
+##################################### Part 3: EDA for Covarites 
+library(scales)
+
+d.cov.eda <- d.clean.survey
+
+d.cov.eda$year_of_birth_range <- case_when(
+  d.cov.eda$year_of_birth >= 1930 & d.cov.eda$year_of_birth < 1940 ~ "1930~1939",
+  d.cov.eda$year_of_birth >= 1940 & d.cov.eda$year_of_birth < 1950 ~ "1940~1949",
+  d.cov.eda$year_of_birth >= 1950 & d.cov.eda$year_of_birth < 1960 ~ "1950~1959",
+  d.cov.eda$year_of_birth >= 1960 & d.cov.eda$year_of_birth < 1970 ~ "1960~1969",
+  d.cov.eda$year_of_birth >= 1970 & d.cov.eda$year_of_birth < 1980 ~ "1970~1979",
+  d.cov.eda$year_of_birth >= 1980 & d.cov.eda$year_of_birth < 1990 ~ "1980~1989",
+  d.cov.eda$year_of_birth >= 1990 & d.cov.eda$year_of_birth < 2000 ~ "1990~1999",
+  d.cov.eda$year_of_birth >= 2000 & d.cov.eda$year_of_birth < 2010 ~ "2000~2009",
+  d.cov.eda$year_of_birth >= 2010 & d.cov.eda$year_of_birth < 2020 ~ "2010~2019",
+  TRUE ~ "other"
+)
+
+d.cov.eda$age_range <- case_when(
+  d.cov.eda$year_of_birth < 1960 ~ "60+",
+  d.cov.eda$year_of_birth >= 1960 & d.cov.eda$year_of_birth < 1975 ~ "45~60",
+  d.cov.eda$year_of_birth >= 1975 & d.cov.eda$year_of_birth < 1990 ~ "30~44",
+  d.cov.eda$year_of_birth >= 1990 & d.cov.eda$year_of_birth < 2002 ~ "18~29",
+  d.cov.eda$year_of_birth >= 2002 & d.cov.eda$year_of_birth < 2020 ~ "18-",
+  TRUE ~ "other"
+)
+
+d.cov.eda %>% 
+    count(age_range = factor(age_range), gender = factor(gender)) %>% 
+    mutate(pct = prop.table(n)) %>% 
+    ggplot(aes(x = age_range, y = pct, fill = gender, label = scales::percent(pct))) + 
+    geom_col(position = 'stack') +     
+    theme(legend.position = c(0.9, 0.85), axis.text.x = element_text(angle = 0, hjust = 1)) +
+    geom_text(position = position_stack(vjust = 0.5),
+              size = 3) + 
+    scale_y_continuous(labels = scales::percent)   #  #labels=function(x) paste0(x,"%")
+
+
+d.cov.eda %>% 
+    count(race = factor(race), gender = factor(gender)) %>% 
+    mutate(pct = prop.table(n)) %>% 
+    ggplot(aes(x = race, y = pct, fill = gender, label = scales::percent(pct))) + 
+    geom_col(position = 'stack') +     
+    theme(legend.position = c(0.7, 0.85), axis.text.x = element_text(angle = 0, hjust = 1)) +
+    scale_x_discrete(labels = wrap_format(10)) + 
+    geom_text(position = position_stack(vjust = 0.5),
+              size = 3) + 
+    scale_y_continuous(labels = scales::percent)   #  #labels=function(x) paste0(x,"%")
+
+
+# unique(d.cov.eda$degree)
+d.cov.eda$degree_order <- case_when(
+  d.cov.eda$degree == "Less than high school Degree" ~ "0-Less than high school Degreee",
+  d.cov.eda$degree == "High School Graduate" ~ "1-High School Graduate",
+  d.cov.eda$degree == "Associate Degree (2-year)" ~ "2-Associate Degree (2-year)",
+  d.cov.eda$degree == "Bachelor's Degree (4-year)" ~ "3-Bachelor's Degree (4-year)",
+  d.cov.eda$degree == "Master's Degree" ~ "4-Master's Degree",
+  d.cov.eda$degree == "Doctoral Degree" ~ "5-Doctoral Degree",
+  d.cov.eda$degree == "Professional Degree (MD, JD etc.)" ~ "6-Professional Degree (MD, JD etc.)")
+
+
+d.cov.eda %>% 
+    count(degree = factor(degree_order), gender = factor(gender)) %>% 
+    mutate(pct = prop.table(n)) %>% 
+    ggplot(aes(x = degree, y = pct, fill = gender, label = scales::percent(pct))) + 
+    geom_col(position = 'stack') +     
+    theme(legend.position = c(0.9, 0.85), axis.text.x = element_text(angle = 0, hjust = 1)) +
+    scale_x_discrete(labels = wrap_format(10)) + 
+    geom_text(position = position_stack(vjust = 0.5),
+              size = 3) + 
+    scale_y_continuous(labels = scales::percent)   #  #labels=function(x) paste0(x,"%")
+
+
+# unique(d.cov.eda$income)
+d.cov.eda$income_edge <- case_when(
+  d.cov.eda$income == "$50,000 to $99,999" ~ 50000,
+  d.cov.eda$income == "$200,000 or more" ~ 200000,
+  d.cov.eda$income == "$10,000 to $49,999" ~ 10000,
+  d.cov.eda$income == "$100,000 to $149,999" ~ 100000,
+  d.cov.eda$income == "Less than $10,000" ~ 0,
+  d.cov.eda$income == "$150,000 to $199,999" ~ 150000)
+
+d.cov.eda %>% 
+    count(income = factor(income_edge), gender = factor(gender)) %>% 
+    mutate(pct = prop.table(n)) %>% 
+    ggplot(aes(x = income, y = pct, fill = gender, label = scales::percent(pct))) + 
+    geom_col(position = 'stack') +     
+    theme(legend.position = c(0.9, 0.85), axis.text.x = element_text(angle = 0, hjust = 1)) +
+    scale_x_discrete(labels = wrap_format(10)) + 
+    geom_text(position = position_stack(vjust = 0.5),
+              size = 3) + 
+    scale_y_continuous(labels = scales::percent)   #  #labels=function(x) paste0(x,"%")
+
+
+
+
+```
+```{r}
+# Covariate balance check
+library(cobalt)
+d <- d.clean.model
+#data(d, package="cobalt")
+#d[, bal.tab(Y_4spec_female ~ income, datweights = "att.weights",
+#     distance = "p.score", method = "weighting")]
+d[, gender_n := ifelse(gender=="Female", 1, 0)]
+model1 <- d[, lm(gender_n ~ gender_n)]
+
+```
+
+```{r}
+##################################### Part 4: EDA for Outcome Variables 
+ggplot(data.frame(d.clean.model), aes(x=Y_1, fill=gender)) +
+  geom_bar() 
+
+```
+```{r}
+# Overall averages
+d <- d.clean.model[,c("gender","Y_4spec_female")]
+d <- na.omit(d)
+
+total <- d[,.N]
+all <- d[, .(pct_all = (.N/total*100)), keyby=(Y_4spec_female)]
+ggplot(data=all, aes(x=factor(Y_4spec_female), y=pct_all)) + geom_bar(stat="identity") + labs(x = "Number of female doctors chosen per subject in the survey") + labs(y = "% of subjects") + labs(title = "Distribution of Female physician count")
+
+# Gender specific averages
+d[gender=="Male", .N]/d[,.N]
+d[gender=="Female", .N]/d[,.N]
+
+d <- na.omit(d.clean.model[,c("gender", "Y_4spec_female")])
+all<-d[, .(pct_all = (.N/total*100)), keyby=.(gender, Y_4spec_female)]
+ggplot(data=all, aes(x=factor(Y_4spec_female), y=pct_all, fill=gender)) + geom_bar(stat="identity", 
+                                                                  position=position_dodge()) + labs(x = "Number of female doctors chosen per subject in the survey") + labs(y = "% of subjects") + labs(title = "Distribution of Female physician count") + guides(fill = guide_legend(title = "Subject gender"))
+
+
+```
+```{r}
+d[, .(pct_all = (.N/total*100)), keyby=list(gender, Y_4spec_female)]
+```
+
+
+
+```{r}
+# Overall averages
+d <- d.clean.model[,c("gender","Y_1")]
+d <- na.omit(d)
+
+total <- d[,.N]
+all <- d[, .(pct_all = (.N/total*100)), keyby=(Y_1)]
+ggplot(data=all, aes(x=factor(Y_1), y=pct_all)) + geom_bar(stat="identity")
+
+# Gender specific averages
+d[gender=="Male", .N]/d[,.N]
+d[gender=="Female", .N]/d[,.N]
+
+d <- na.omit(d.clean.model[,c("gender", "Y_1")])
+all<-d[, .N, keyby=.(gender, Y_1)]
+ggplot(data=all, aes(x=factor(Y_1), y=N, fill=gender)) + geom_bar(stat="identity", 
+                                                                  position=position_dodge())
+```
+```{r}
+d <- d.clean.model
+d[, mean(Y_4spec_female)]
+```
+```{r}
+d <- d.clean.model
+all <- d[, .(pct_all = (.N/total*100)), keyby=.(gender)]
+ggplot(data=all, aes(x=factor(gender), y=pct_all, fill=gender)) + geom_bar(stat="identity", position=position_dodge())
+```
+
+
+
+```{r}
+# Effects by gender and speciality
+
+plot_by_specialty <- function(spec) {
+  d <- na.omit(d.clean.model.trans[specialty==spec, c("gender","Y_if_female","isfemale")])
+  all <- d[, .(pct_all = (.N/total*100)), keyby=.(gender, Y_if_female)]
+  
+  ggplot(data=all, aes(x=factor(Y_if_female), y=pct_all, fill=gender)) + geom_bar(stat="identity", position=position_dodge()) + labs(x = paste("Number of female ",spec,"s chosen per subject in the survey", sep='')) + labs(y = "% of subjects") + labs(title = "Distribution of Female physicians") + guides(fill = guide_legend(title = "Subject gender"))
+}
+
+plot_by_specialty("pcp")
+plot_by_specialty("cardiologist")
+plot_by_specialty("psychiatrist")
+plot_by_specialty("dentist")
+```
+
+
+
+
+```{r}
+# Income effects
+d <- na.omit(d.clean.survey[,c("income","Y_1")])
+total <- d[,.N]
+all<-d[, .(pct = (.N/total)), keyby=.(income, Y_1)]
+ggplot(data=all, aes(x=factor(Y_1), y=pct, fill=income)) + geom_bar(stat="identity",
+                                                                    position=position_dodge())
+
+```
+```{r}
+# Race effects
+d <- na.omit(d.clean.survey[,c("race","Y_1")])
+total <- d[,.N]
+all<-d[, .(pct = (.N/total)), keyby=.(race, Y_1)]
+ggplot(data=all, aes(x=factor(Y_1), y=pct, fill=race)) + geom_bar(stat="identity",
+                                                                    position=position_dodge())
+```
+```{r}
+# covariate balance check
+d <- na.omit(d.clean.model.trans)
+
+total <- d[,.N]
+d[Y_if_female==0, .N]/total
+d[Y_if_female==1, .N]/total
+
+d[,.(mean(Y_4spec_female))]
+
+
+#t.test(d[Y_if_female==0,], d[Y_if_female==1,])
+
+bal_check_gender <- d[, lm(Y_if_female ~ isfemale)]
+bal_check_specialty <- d[, lm(Y_if_female ~ specialty)]
+
+library(cobalt)
+d <- d.clean.model.trans
+covs <- subset(d, select = c(gender))
+d$p.score <- glm(f.build("isfemale", covs), data = d, 
+                       family = "binomial")$fitted.values
+d$att.weights <- with(d, isfemale + (1-isfemale)*p.score/(1-p.score))
+
+
+b <- bal.tab(covs, treat = d$isfemale, data = d.clean.model.trans, weights = d$att.weights, method = 'weighting')
+b
+
+```
+```{r}
+d <- d.clean.model
+model1 <- d[,lm(Y_1 ~ gender)]
+stargazer(model1, type="text")
+summary(model1)
+d[gender=="Male", .(mean(Y_1))]
+```
+
+
+
+```{r}
+d <- d.clean.model
+d <- d[, age := (2019 - as.numeric(year_of_birth))]
+m_age <- d[, lm(Y_4spec_female ~ gender + age + gender * age)]
+stargazer(m_age, type="text", p.auto = TRUE)
+summary(m_age)
+```
+```{r}
+d[gender=="Male" & age==30, .(mean(Y_4spec_female))]
+```
+
+
+
+
+
+```{r}
+d <- d.clean.model
+d <- na.omit(d)
+m_gender <- d[, lm(Y_4spec_female ~ gender)]
+stargazer(m_gender, type="text", p.auto = TRUE)
+
+d[, gender_n := ifelse(gender=="Male", 0, 1)]
+d[,cor(gender_n, Y_4spec_female)]
+```
+
+```{r}
+d[gender=="Male", .(mean(Y_4spec_female))]
+d[gender=="Female", .(mean(Y_4spec_female))]
+```
+```{r}
+library(car)
+d <- d.clean.model[,c("gender", "Y_4spec_female")]
+d[, scatterplot(Y_4spec_female ~ as.factor(gender))]
+```
+```{r}
+d <- d.clean.model.trans
+model1 <- d[, lm(Y_if_female ~ Y_if_female + isfemale + Y_if_female * isfemale)]
+stargazer(model1, type = "text")
+```
+```{r}
+cse <- function(model, cl) {
+  vcov <- vcovCL(model, cluster=cl)
+  sqrt(diag(vcov))
+}
+
+d <- na.omit(d.clean.model.trans)
+model2 <- d[, lm(Y_if_female ~ Y_if_female + isfemale + Y_if_female * isfemale)]
+model2$vcovCL_ <- vcovCL(model2, cluster = d[, respondent_id])
+coeftest(model2, model2$vcovCL)
+model2$cse <- cse(model2, d[, respondent_id])
+stargazer(model2, type="text")
+```
+
+
+```{r}
+total <- d[,.N]
+d[isfemale==1 & Y_if_female==1, .N/total]
+d[isfemale==1 & Y_if_female==0, .N/total]
+d[isfemale==0 & Y_if_female==0, .N/total]
+d[isfemale==0 & Y_if_female==1, .N/total]
+```
+
+
+
+
+```{r}
+d <- d.clean.survey[,c("channel", "gender","race","income","degree","Y_1")]
+d <- na.omit(d)
+```
+
+```{r}
+# Model 1 - Effect of participant gender on outcome
+m_gender <- d[, lm(Y_1 ~ gender)]
+summary(m_gender)
+```
+
+
+
+
+```{r}
+# Model 2 - Effet of participant race on outcome
+m_income <- d[, lm(Y_4spec_female ~ gender + income + gender * income)]
+summary(m_income, type="text")
+
+d[income == "Less than $10,000" & gender=="Male", .(mean(Y_4spec_female))]
+```
+
+```{r}
+# Model 3 - Effect of participant degree on outcome
+d <- na.omit(d)
+m_degree <- d[, lm(Y_4spec_female ~ gender + degree + gender*degree)]
+summary(m_degree)
+```
+
+```{r}
+# Model 4 - Effect of participant income on outcome
+m_income <- d[, lm(Y_1 ~ income)]
+summary(m_income)
+```
+
+```{r}
+# Model 5 - Interaction effect of gender and race
+m_gender_race <- d[, lm(Y_4spec_female ~ gender + race + gender * race)]
+summary(m_gender_race)
+```
+```{r}
+# Model 6 - Interaction effect of gender and race
+m_gender_income <- d[, lm(Y_1 ~ gender + income + gender * income)]
+stargazer(m_gender_income, type = "text")
+```
+```{r}
+# Model 7 - Interaction effect of gender and degree
+m_gender_degree <- d[, lm(Y_4spec_female ~ gender + degree + gender * degree)]
+summary(m_gender_degree)
+```
+```{r}
+# Model 7 - Interaction effect of gender and degree
+d <- d.clean.model
+d[, age := (2019-yea]
+m_gender_degree <- d[, lm(Y_4spec_female ~ gender + degree + gender * degree)]
+summary(m_gender_degree)
+```
+
+
+
+```{r}
+d <- d.clean.model
+d_gender_spec_male <- d[channel=="Qualtrics"]
+d_gender_spec_male[, Y_specific := (gender_specific_score3 + gender_specific_score4)-(gender_specific_score1 + gender_specific_score2)]
+d_gender_spec_male[gender=="Male",mean(Y_specific)]
+model1 <- d_gender_spec_male[, lm(Y_specific ~ gender)]
+stargazer(model1, type="text")
+summary(model1)
+```
+
+```{r}
+# Use stargazer to consolidate all the models
+stargazer(m_gender, 
+          m_degree, 
+          m_race,
+          m_gender_race,
+          m_gender_income,
+          m_gender_degree,
+          type="text")
+
+
+```
